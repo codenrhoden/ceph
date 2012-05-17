@@ -3480,7 +3480,8 @@ void OSD::handle_osd_map(MOSDMap *m)
   map_lock.put_write();
 
   // yay!
-  activate_map();
+  if (is_active())
+    activate_map();
 
   if (m->newest_map && m->newest_map > last) {
     dout(10) << " msg say newest map is " << m->newest_map << ", requesting more" << dendl;
