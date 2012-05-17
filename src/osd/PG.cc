@@ -1450,18 +1450,14 @@ void PG::do_request(OpRequestRef op)
     return;
   } else if (!flushed) {
     waiting_for_active.push_back(op);
-  } else if (!is_active()) {
-    waiting_for_active.push_back(op);
-    return;
-  } else if (is_replay()) {
-    waiting_for_active.push_back(op);
-    return;
   }
-
-  assert(!waiting_for_active.size());
 
   switch (op->request->get_type()) {
   case CEPH_MSG_OSD_OP:
+    if (is_replay() || !is_active()) {
+      waiting_for_active.push_back(op);
+      return;
+    }
     do_op(op); // do it now
     break;
 
