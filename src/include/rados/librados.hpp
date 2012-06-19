@@ -428,6 +428,7 @@ namespace librados
     int aio_append(const std::string& oid, AioCompletion *c, const bufferlist& bl,
 		  size_t len);
     int aio_write_full(const std::string& oid, AioCompletion *c, const bufferlist& bl);
+    int aio_remove(const std::string& oid, AioCompletion *c);
     
     int aio_flush();
 
