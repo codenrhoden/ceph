@@ -26,16 +26,21 @@
 
 
 const char *BENCH_DATA = "benchmark_write_data";
+const char *BENCH_PREFIX = "benchmark_data";
 
-static void generate_object_name(char *s, size_t size, int objnum, int pid = 0)
+static void generate_object_name(char *s, size_t size, int objnum = -1, int pid = 0)
 {
   char hostname[30];
   gethostname(hostname, sizeof(hostname)-1);
   hostname[sizeof(hostname)-1] = 0;
-  if (pid) {
-    snprintf(s, size, "%s_%d_object%d", hostname, pid, objnum);
+
+  if (!pid)
+    pid = getpid();
+
+  if (objnum >= 0) {
+    snprintf(s, size, "%s_%s_%d_object%d", BENCH_PREFIX, hostname, pid, objnum);
   } else {
-    snprintf(s, size, "%s_%d_object%d", hostname, getpid(), objnum);
+    snprintf(s, size, "%s_%s_%d", BENCH_PREFIX, hostname, pid);
   }
 }
 
@@ -235,9 +240,14 @@ static double vec_stddev(vector<double>& v)
 }
 
 int ObjBencher::write_bench(int secondsToRun, int concurrentios) {
+  char prefix[128];
+
   out(cout) << "Maintaining " << concurrentios << " concurrent writes of "
        << data.object_size << " bytes for at least "
        << secondsToRun << " seconds." << std::endl;
+
+  generate_object_name(prefix, 128);
+  out(cout) << "Object prefix: " << prefix << std::endl;
 
   char* name[concurrentios];
   bufferlist* contents[concurrentios];
