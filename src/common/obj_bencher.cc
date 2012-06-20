@@ -212,7 +212,7 @@ int ObjBencher::aio_bench(int operation, int secondsToRun, int concurrentios, in
       goto out;
     }
  
-    r = clean_up(num_objects, prevPid);
+    r = clean_up(num_objects, prevPid, concurrentios);
     if (r != 0) goto out;
 
     // lastrun file
@@ -370,7 +370,6 @@ int ObjBencher::write_bench(int secondsToRun, int concurrentios) {
     //create new contents and name on the heap, and fill them
     newContents = new bufferlist();
     newName = new char[128];
-    generate_object_name(newName, 128, data.started);
     snprintf(data.object_contents, data.object_size, "I'm the %16dth object!", data.started);
     newContents->append(data.object_contents, data.object_size);
     completion_wait(slot);
@@ -671,24 +670,7 @@ int ObjBencher::seq_read_bench(int seconds_to_run, int num_objects, int concurre
   return -5;
 }
 
-int ObjBencher::clean_up(int num_objects, int prevPid) {
-  int r = 0;
-  char name[128];
-
-  for (int i = 0; i < num_objects; ++i) {
-      generate_object_name(name, 128, i, prevPid);
-      r = sync_remove(name);
-
-      if (r < 0) {
-          return r;
-      }
-  }
-
-  return 0;
-}
-
-
-int ObjBencher::clean_up(const std::string& prefix, int concurrent_ios) {
+int ObjBencher::clean_up(const std::string& prefix, int concurrentios) {
   int r = 0;
   char metadata_name[128];
   int object_size;
@@ -701,13 +683,143 @@ int ObjBencher::clean_up(const std::string& prefix, int concurrent_ios) {
   if (r != 1) return r;
   // if this file is not found we should try to do a linear search on the prefix
 
-  r = clean_up(num_objects, prevPid);
+  r = clean_up(num_objects, prevPid, concurrentios);
   if (r != 0) return r;
 
   r = sync_remove(metadata_name);
   if (r != 0) return r;
 
   return 0;
+}
+
+int ObjBencher::clean_up(int num_objects, int prevPid, int concurrentios) {
+  lock_cond lc(&lock);
+  char* name[concurrentios];
+  int r = 0;
+  utime_t runtime;
+
+  lock.Lock();
+  data.done = false;
+  data.in_flight = 0;
+  data.started = 0;
+  data.finished = 0;
+  lock.Unlock();
+
+  // don't start more completions than files
+  if (num_objects < concurrentios) {
+    concurrentios = num_objects;
+  }
+
+  r = completions_init(concurrentios);
+  if (r < 0)
+    return r;
+
+  //set up initial removes
+  for (int i = 0; i < concurrentios; ++i) {
+    name[i] = new char[128];
+    generate_object_name(name[i], 128, i, prevPid);
+  }
+
+  //start initial removes
+  for (int i = 0; i < concurrentios; ++i) {
+    create_completion(i, _aio_cb, (void *)&lc);
+    r = aio_remove(name[i], i);
+    if (r < 0) { //naughty, doesn't clean up heap
+      cerr << "r = " << r << std::endl;
+      goto ERR;
+    }
+    lock.Lock();
+    ++data.started;
+    ++data.in_flight;
+    lock.Unlock();
+  }
+
+  //keep on adding new removes as old ones complete
+  int slot;
+  char* newName;
+
+  slot = 0;
+  while (data.started < num_objects) {
+    lock.Lock();
+    int old_slot = slot;
+    bool found = false;
+    while (1) {
+      do {
+	if (completion_is_done(slot)) {
+          found = true;
+	  break;
+	}
+        slot++;
+        if (slot == concurrentios) {
+          slot = 0;
+        }
+      } while (slot != old_slot);
+      if (found) {
+	break;
+      }
+      lc.cond.Wait(lock);
+    }
+    lock.Unlock();
+    newName = new char[128];
+    generate_object_name(newName, 128, data.started, prevPid);
+    completion_wait(slot);
+    lock.Lock();
+    r = completion_ret(slot);
+    if (r != 0 && r != -2) { // -2: file does not exist
+      cerr << "remove got " << r << std::endl;
+      lock.Unlock();
+      goto ERR;
+    }
+    ++data.finished;
+    --data.in_flight;
+    lock.Unlock();
+    release_completion(slot);
+
+    //start new remove and check data if requested
+    create_completion(slot, _aio_cb, (void *)&lc);
+    r = aio_remove(newName, slot);
+    if (r < 0) {
+      goto ERR;
+    }
+    lock.Lock();
+    ++data.started;
+    ++data.in_flight;
+    lock.Unlock();
+    delete name[slot];
+    name[slot] = newName;
+  }
+
+  //wait for final removes to complete
+  while (data.finished < data.started) {
+    slot = data.finished % concurrentios;
+    completion_wait(slot);
+    lock.Lock();
+    r = completion_ret(slot);
+    if (r != 0 && r != -2) { // -2: file doesn't exist
+      cerr << "remove got " << r << std::endl;
+      lock.Unlock();
+      goto ERR;
+    }
+    ++data.finished;
+    --data.in_flight;
+    release_completion(slot);
+    lock.Unlock();
+    delete[] name[slot];
+  }
+
+  lock.Lock();
+  data.done = true;
+  lock.Unlock();
+
+  completions_done();
+
+  return 0;
+
+ ERR:
+  lock.Lock();
+  data.done = 1;
+  lock.Unlock();
+  return -5;
 }
 
 
