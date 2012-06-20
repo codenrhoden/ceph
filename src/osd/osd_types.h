@@ -1330,7 +1330,7 @@ struct pg_log_t {
   ostream& print(ostream& out) const;
 
   void encode(bufferlist &bl) const;
-  void decode(bufferlist::iterator &bl);
+  void decode(bufferlist::iterator &bl, int64_t pool = -1);
   void dump(Formatter *f) const;
   static void generate_test_instances(list<pg_log_t*>& o);
 };
@@ -1401,7 +1401,7 @@ struct pg_missing_t {
   }
 
   void encode(bufferlist &bl) const;
-  void decode(bufferlist::iterator &bl);
+  void decode(bufferlist::iterator &bl, int64_t pool = -1);
   void dump(Formatter *f) const;
   static void generate_test_instances(list<pg_missing_t*>& o);
 };
@@ -1768,7 +1768,7 @@ struct ScrubMap {
   void merge_incr(const ScrubMap &l);
 
   void encode(bufferlist& bl) const;
-  void decode(bufferlist::iterator& bl);
+  void decode(bufferlist::iterator& bl, int64_t pool=-1);
   void dump(Formatter *f) const;
   static void generate_test_instances(list<ScrubMap*>& o);
 };

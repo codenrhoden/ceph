@@ -1528,16 +1528,16 @@ ostream& operator<<(ostream& out, const pg_log_entry_t& e)
 
 void pg_log_t::encode(bufferlist& bl) const
 {
-  ENCODE_START(3, 3, bl);
+  ENCODE_START(4, 3, bl);
   ::encode(head, bl);
   ::encode(tail, bl);
   ::encode(log, bl);
   ENCODE_FINISH(bl);
 }
  
-void pg_log_t::decode(bufferlist::iterator &bl)
+void pg_log_t::decode(bufferlist::iterator &bl, int64_t pool)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(3, 3, 3, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(4, 3, 3, bl);
   ::decode(head, bl);
   ::decode(tail, bl);
   if (struct_v < 2) {
@@ -1546,6 +1546,17 @@ void pg_log_t::decode(bufferlist::iterator &bl)
   }
   ::decode(log, bl);
   DECODE_FINISH(bl);
+
+  // handle hobject_t format change
+  if (struct_v < 4) {
+    assert(pool != -1);
+    for (list<pg_log_entry_t>::iterator i = log.begin();
+	 i != log.end();
+	 ++i) {
+      if (i->soid.pool == -1)
+	i->soid.pool = pool;
+    }
+  }
 }
 
 void pg_log_t::dump(Formatter *f) const
@@ -1642,16 +1653,35 @@ ostream& pg_log_t::print(ostream& out) const
 
 void pg_missing_t::encode(bufferlist &bl) const
 {
-  ENCODE_START(2, 2, bl);
+  ENCODE_START(3, 2, bl);
   ::encode(missing, bl);
   ENCODE_FINISH(bl);
 }
 
-void pg_missing_t::decode(bufferlist::iterator &bl)
+void pg_missing_t::decode(bufferlist::iterator &bl, int64_t pool)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(2, 2, 2, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(3, 2, 2, bl);
   ::decode(missing, bl);
   DECODE_FINISH(bl);
+
+  if (struct_v < 3) {
+    assert(pool != -1);
+    // Handle hobject_t upgrade
+    map<hobject_t, item> tmp;
+    for (map<hobject_t, item>::iterator i = missing.begin();
+	 i != missing.end();
+      ) {
+      if (i->first.pool == -1) {
+	hobject_t to_insert(i->first);
+	to_insert.pool = pool;
+	tmp[to_insert] = i->second;
+	missing.erase(i++);
+      } else {
+	++i;
+      }
+    }
+    missing.insert(tmp.begin(), tmp.end());
+  }
 
   for (map<hobject_t,item>::iterator it = missing.begin();
        it != missing.end();
@@ -2378,7 +2408,7 @@ void ScrubMap::merge_incr(const ScrubMap &l)
 
 void ScrubMap::encode(bufferlist& bl) const
 {
-  ENCODE_START(2, 2, bl);
+  ENCODE_START(3, 2, bl);
   ::encode(objects, bl);
   ::encode(attrs, bl);
   ::encode(logbl, bl);
@@ -2387,15 +2417,30 @@ void ScrubMap::encode(bufferlist& bl) const
   ENCODE_FINISH(bl);
 }
 
-void ScrubMap::decode(bufferlist::iterator& bl)
+void ScrubMap::decode(bufferlist::iterator& bl, int64_t pool)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(2, 2, 2, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(3, 2, 2, bl);
   ::decode(objects, bl);
   ::decode(attrs, bl);
   ::decode(logbl, bl);
   ::decode(valid_through, bl);
   ::decode(incr_since, bl);
   DECODE_FINISH(bl);
+
+  // handle hobject_t upgrade
+  if (struct_v < 3) {
+    assert(pool != -1);
+    map<hobject_t, object> tmp;
+    tmp.swap(objects);
+    for (map<hobject_t, object>::iterator i = tmp.begin();
+	 i != tmp.end();
+	 ++i) {
+      hobject_t first(i->first);
+      if (first.pool == -1)
+	first.pool = pool;
+      objects[first] = i->second;
+    }
+  }
 }
 
 void ScrubMap::dump(Formatter *f) const
